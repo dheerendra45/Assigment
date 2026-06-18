@@ -15,12 +15,21 @@ export const loadTask = asyncHandler(async (req, _res, next) => {
   next();
 });
 
+// Shared rule: ADMIN/MANAGER reach any task in the org; a MEMBER only their own.
+const canAccessTask = (user, task) => PRIVILEGED.includes(user.role) || task.assigneeId === user.id;
+
 // ADMIN/MANAGER may mutate any task in the org; a MEMBER only their own.
 export const authorizeTaskMutation = (req, _res, next) => {
-  const isPrivileged = PRIVILEGED.includes(req.user.role);
-  const isAssignee = req.task.assigneeId === req.user.id;
-  if (!isPrivileged && !isAssignee) {
+  if (!canAccessTask(req.user, req.task)) {
     return next(Errors.forbidden('Only the task assignee, a MANAGER or an ADMIN can modify this task'));
+  }
+  next();
+};
+
+// Same ownership rule for reads: a MEMBER can only view tasks assigned to them.
+export const authorizeTaskRead = (req, _res, next) => {
+  if (!canAccessTask(req.user, req.task)) {
+    return next(Errors.forbidden('A MEMBER can only view tasks assigned to them'));
   }
   next();
 };
