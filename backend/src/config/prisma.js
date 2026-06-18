@@ -1,10 +1,7 @@
-// Single shared PrismaClient instance for the whole process.
 import { PrismaClient } from '@prisma/client';
-import { isProduction } from './env.js';
 
-export const prisma = new PrismaClient({
-  log: isProduction ? ['warn', 'error'] : ['warn', 'error'],
-});
+// Single shared PrismaClient for the process.
+export const prisma = new PrismaClient({ log: ['warn', 'error'] });
 
 export async function disconnectPrisma() {
   await prisma.$disconnect();

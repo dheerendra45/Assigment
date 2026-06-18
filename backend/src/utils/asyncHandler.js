@@ -1,5 +1,4 @@
-// Wraps an async route handler so rejected promises are forwarded to the
-// centralized Express error middleware instead of crashing the process.
+// Forwards rejected promises from async handlers to the error middleware.
 export const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };

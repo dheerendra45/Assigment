@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: TaskFlow — Team Task Tracker API
+  version: 1.0.0
+  description: >
+    Organization-scoped task tracker. JWT access + rotating refresh tokens,
+    RBAC enforced in middleware, server-side status state machine, Redis-cached
+    per-assignee task lists.
+servers:
+  - url: http://localhost:3001/api
+    description: Local
+
+tags:
+  - name: Auth
+  - name: Tasks
+  - name: Users
+  - name: Analytics
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        status: { type: integer, example: 400 }
+        code: { type: string, example: VALIDATION_ERROR }
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [ADMIN, MANAGER, MEMBER] }
+        organizationId: { type: string, format: uuid }
+    AuthResponse:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        accessToken: { type: string }
+        refreshToken: { type: string }
+    Task:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        priority: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        status: { type: string, enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED] }
+        dueDate: { type: string, format: date-time, nullable: true }
+        assigneeId: { type: string, format: uuid, nullable: true }
+        organizationId: { type: string, format: uuid }
+        assignee:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+            email: { type: string }
+            role: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPrevPage: { type: boolean }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register an organization (registrant becomes ADMIN)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organizationName, name, email, password]
+              properties:
+                organizationName: { type: string, example: Acme Inc. }
+                name: { type: string, example: Jane Doe }
+                email: { type: string, format: email, example: jane@acme.test }
+                password: { type: string, minLength: 8, example: Password123 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Email already exists, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, example: admin@acme.test }
+                password: { type: string, example: Password123 }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token, issue new pair
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string, description: Optional if sent as httpOnly cookie }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '401': { description: Invalid/expired/revoked refresh token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the presented refresh token
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Logged out }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user (from access token)
+      responses:
+        '200': { description: OK }
+        '401': { description: Unauthorized }
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks (paginated, filterable). MEMBERs see only their own.
+      parameters:
+        - { in: query, name: page, schema: { type: integer, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 100 } }
+        - { in: query, name: status, schema: { type: string, enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED] } }
+        - { in: query, name: priority, schema: { type: string, enum: [LOW, MEDIUM, HIGH] } }
+        - { in: query, name: assignee, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Task' } }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+                  cached: { type: boolean }
+    post:
+      tags: [Tasks]
+      summary: Create task (ADMIN/MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                priority: { type: string, enum: [LOW, MEDIUM, HIGH] }
+                status: { type: string, enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED] }
+                assigneeId: { type: string, format: uuid, nullable: true }
+                dueDate: { type: string, format: date-time, nullable: true }
+      responses:
+        '201': { description: Created }
+        '400': { description: Validation error }
+        '403': { description: Forbidden }
+
+  /tasks/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tasks]
+      summary: Get a task (org-scoped)
+      responses:
+        '200': { description: OK }
+        '404': { description: Not found }
+    put:
+      tags: [Tasks]
+      summary: Update task fields (owner or ADMIN/MANAGER)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string, nullable: true }
+                priority: { type: string, enum: [LOW, MEDIUM, HIGH] }
+                assigneeId: { type: string, format: uuid, nullable: true }
+                dueDate: { type: string, format: date-time, nullable: true }
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden }
+        '404': { description: Not found }
+    delete:
+      tags: [Tasks]
+      summary: Delete task (ADMIN/MANAGER)
+      responses:
+        '204': { description: No content }
+        '403': { description: Forbidden }
+
+  /tasks/{id}/status:
+    patch:
+      tags: [Tasks]
+      summary: Advance status (assignee or ADMIN/MANAGER; state machine enforced)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [TODO, IN_PROGRESS, IN_REVIEW, DONE, BLOCKED] }
+      responses:
+        '200': { description: OK }
+        '400': { description: Invalid transition (VALIDATION_ERROR) }
+        '403': { description: Forbidden }
+        '404': { description: Not found }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List org members (ADMIN/MANAGER)
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden }
+    post:
+      tags: [Users]
+      summary: Create user in org (ADMIN)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                role: { type: string, enum: [ADMIN, MANAGER, MEMBER] }
+      responses:
+        '201': { description: Created }
+        '403': { description: Forbidden }
+        '409': { description: Conflict }
+
+  /users/{id}/role:
+    patch:
+      tags: [Users]
+      summary: Update a user's role (ADMIN)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [ADMIN, MANAGER, MEMBER] }
+      responses:
+        '200': { description: OK }
+        '403': { description: Forbidden }
+        '404': { description: Not found }
+
+  /users/{id}:
+    delete:
+      tags: [Users]
+      summary: Delete a user (ADMIN)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: No content }
+        '400': { description: Cannot delete self }
+        '403': { description: Forbidden }
+
+  /analytics:
+    get:
+      tags: [Analytics]
+      summary: Overdue tasks per user + avg completion time (ADMIN/MANAGER)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  generatedAt: { type: string, format: date-time }
+                  totalOverdue: { type: integer }
+                  perUser:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        userId: { type: string }
+                        name: { type: string }
+                        email: { type: string }
+                        overdueCount: { type: integer }
+                        completedCount: { type: integer }
+                        avgCompletionHours: { type: number }
+        '403': { description: Forbidden }

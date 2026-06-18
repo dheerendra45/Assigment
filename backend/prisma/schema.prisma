@@ -1,16 +1,4 @@
-// Team Task Tracker - Prisma Schema
-// Database: PostgreSQL
-// 
-// Design decisions:
-// 1. Organization-scoped multi-tenancy: All entities are scoped to an org,
-//    enabling data isolation without separate databases.
-// 2. RefreshToken table for JWT rotation: Storing hashed refresh tokens allows
-//    server-side revocation and prevents token replay attacks.
-// 3. Indexes on Task.status, Task.assigneeId, Task.dueDate: These are the 
-//    primary filter/sort columns in the task list endpoint. Compound indexes
-//    weren't chosen because filters are independently optional.
-// 4. Soft-delete pattern on RefreshToken (revoked flag) rather than hard delete:
-//    Enables audit trail of token usage and detection of token theft.
+// Team Task Tracker schema — org-scoped multi-tenancy, hashed refresh tokens.
 
 generator client {
   provider = "prisma-client-js"
