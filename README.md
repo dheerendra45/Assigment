@@ -1,4 +1,4 @@
-# TaskFlow — Team Task Tracker
+# TaskFlow Team Task Tracker
 
 A production-quality, organization-scoped task tracker. Node.js + Express +
 Prisma + PostgreSQL + Redis on the back, React (Vite) on the front, all wired
@@ -219,10 +219,10 @@ npm test
 
 Covers the two required critical flows plus extras:
 
-- ✅ invalid status transition is rejected (`400 VALIDATION_ERROR`)
-- ✅ a MEMBER cannot advance another member's task (`403`)
-- ✅ a MEMBER cannot create tasks (`403`)
-- ✅ the assignee can advance their own task (`200`)
+-  invalid status transition is rejected (`400 VALIDATION_ERROR`)
+-  a MEMBER cannot advance another member's task (`403`)
+-  a MEMBER cannot create tasks (`403`)
+-  the assignee can advance their own task (`200`)
 
 ---
 
