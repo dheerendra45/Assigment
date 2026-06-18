@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tasktracker-postgres
+    environment:
+      POSTGRES_USER: tasktracker
+      POSTGRES_PASSWORD: tasktracker_pass
+      POSTGRES_DB: tasktracker_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasktracker -d tasktracker_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tasktracker-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: tasktracker-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tasktracker-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tasktracker-backend
+    environment:
+      DATABASE_URL: "postgresql://tasktracker:tasktracker_pass@postgres:5432/tasktracker_db?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      JWT_ACCESS_SECRET: "production-access-secret-change-me"
+      JWT_REFRESH_SECRET: "production-refresh-secret-change-me"
+      JWT_ACCESS_EXPIRES_IN: "15m"
+      JWT_REFRESH_EXPIRES_IN: "7d"
+      PORT: "3001"
+      NODE_ENV: "production"
+      CORS_ORIGIN: "http://localhost:8080"
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tasktracker-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: "http://localhost:3001"
+    container_name: tasktracker-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - tasktracker-net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  tasktracker-net:
+    driver: bridge
